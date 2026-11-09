@@ -1,0 +1,54 @@
+#!/bin/bash
+set -euxo pipefail
+
+dnf update -y
+dnf install -y python3 python3-pip nodejs npm
+
+mkdir -p /opt/terraform-app/backend /opt/terraform-app/frontend
+
+echo '${backend_app_b64}' | base64 -d > /opt/terraform-app/backend/app.py
+echo '${backend_reqs_b64}' | base64 -d > /opt/terraform-app/backend/requirements.txt
+
+echo '${frontend_app_b64}' | base64 -d > /opt/terraform-app/frontend/server.js
+echo '${frontend_pkg_b64}' | base64 -d > /opt/terraform-app/frontend/package.json
+
+python3 -m venv /opt/terraform-app/backend/venv
+/opt/terraform-app/backend/venv/bin/pip install --upgrade pip
+/opt/terraform-app/backend/venv/bin/pip install -r /opt/terraform-app/backend/requirements.txt
+
+cd /opt/terraform-app/frontend
+npm install
+
+cat > /etc/systemd/system/flask-app.service <<'SERVICE'
+[Unit]
+Description=Flask Backend
+After=network.target
+
+[Service]
+WorkingDirectory=/opt/terraform-app/backend
+ExecStart=/opt/terraform-app/backend/venv/bin/python /opt/terraform-app/backend/app.py
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+SERVICE
+
+cat > /etc/systemd/system/express-app.service <<'SERVICE'
+[Unit]
+Description=Express Frontend
+After=network.target flask-app.service
+
+[Service]
+WorkingDirectory=/opt/terraform-app/frontend
+Environment=PORT=3000
+Environment=BACKEND_URL=http://127.0.0.1:5000
+ExecStart=/usr/bin/node /opt/terraform-app/frontend/server.js
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+SERVICE
+
+systemctl daemon-reload
+systemctl enable flask-app express-app
+systemctl start flask-app express-app
